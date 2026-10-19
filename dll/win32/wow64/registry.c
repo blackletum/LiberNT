@@ -37,11 +37,20 @@ struct key_redirect
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING    name;
     WCHAR            *buffer;
+    ULONG             node_end;
+    ULONG             first_end;
 };
 
 static const WCHAR software_root[] = L"\\REGISTRY\\MACHINE\\SOFTWARE";
+static const WCHAR user_root[] = L"\\REGISTRY\\USER\\";
+static const WCHAR software_classes[] = L"\\Software\\Classes";
+static const WCHAR classes_suffix[] = L"_Classes";
 static const WCHAR wow6432node[] = L"\\Wow6432Node";
 static const WCHAR classes[] = L"\\Classes";
+static const WCHAR * const redirected_classes[] =
+{
+    L"\\CLSID", L"\\DirectShow", L"\\Interface", L"\\Media Type", L"\\MediaFoundation"
+};
 
 static BOOL is_key_element( const WCHAR *str, ULONG len, const WCHAR *element, ULONG element_len )
 {
@@ -49,33 +58,32 @@ static BOOL is_key_element( const WCHAR *str, ULONG len, const WCHAR *element, U
     return len == element_len || str[element_len] == '\\';
 }
 
-static BOOL key_exists( const WCHAR *path, ULONG len )
+static ULONG redirected_classes_len( const WCHAR *str, ULONG len )
 {
-    OBJECT_ATTRIBUTES attr;
-    UNICODE_STRING name;
-    HANDLE key;
-    NTSTATUS status;
+    ULONG i, element_len;
 
-    name.Buffer = (WCHAR *)path;
-    name.Length = name.MaximumLength = len * sizeof(WCHAR);
-    InitializeObjectAttributes( &attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL );
-    status = NtOpenKeyEx( &key, KEY_READ, &attr, 0 );
-    if (!status) NtClose( key );
-    return status != STATUS_OBJECT_NAME_NOT_FOUND && status != STATUS_OBJECT_PATH_NOT_FOUND;
+    for (i = 0; i < ARRAY_SIZE(redirected_classes); i++)
+    {
+        element_len = wcslen( redirected_classes[i] );
+        if (is_key_element( str, len, redirected_classes[i], element_len )) return element_len;
+    }
+    return 0;
 }
 
 static OBJECT_ATTRIBUTES *key_attr_redirect( struct key_redirect *redir, OBJECT_ATTRIBUTES *attr, ACCESS_MASK access )
 {
     const ULONG root_len = ARRAY_SIZE(software_root) - 1, node_len = ARRAY_SIZE(wow6432node) - 1;
-    const ULONG classes_len = ARRAY_SIZE(classes) - 1;
+    const ULONG classes_len = ARRAY_SIZE(classes) - 1, user_len = ARRAY_SIZE(user_root) - 1;
+    const ULONG software_classes_len = ARRAY_SIZE(software_classes) - 1, suffix_len = ARRAY_SIZE(classes_suffix) - 1;
     char buffer[sizeof(KEY_NAME_INFORMATION) + MAX_PATH * sizeof(WCHAR)];
     KEY_NAME_INFORMATION *info = (KEY_NAME_INFORMATION *)buffer;
-    const WCHAR *parent = NULL, *rest, *sub;
-    ULONG parent_len = 0, name_len, full_len, rest_len, sub_len, first_len, size = sizeof(buffer);
+    const WCHAR *parent = NULL;
+    ULONG parent_len = 0, name_len, full_len, insert, first = 0, i, size = sizeof(buffer);
     WCHAR *full, *out;
     NTSTATUS status;
 
     redir->buffer = NULL;
+    redir->node_end = redir->first_end = 0;
     if (!attr || !attr->ObjectName || (access & KEY_WOW64_64KEY)) return attr;
 
     name_len = attr->ObjectName->Length / sizeof(WCHAR);
@@ -100,7 +108,7 @@ static OBJECT_ATTRIBUTES *key_attr_redirect( struct key_redirect *redir, OBJECT_
     else status = STATUS_OBJECT_PATH_SYNTAX_BAD;
 
     full_len = parent_len + (parent_len && name_len ? 1 : 0) + name_len;
-    if (status || full_len + node_len + classes_len > UNICODE_STRING_MAX_CHARS ||
+    if (status || full_len + node_len > UNICODE_STRING_MAX_CHARS ||
         !(full = RtlAllocateHeap( GetProcessHeap(), 0, (2 * full_len + node_len + 1) * sizeof(WCHAR) )))
     {
         if (info != (KEY_NAME_INFORMATION *)buffer) RtlFreeHeap( GetProcessHeap(), 0, info );
@@ -112,47 +120,41 @@ static OBJECT_ATTRIBUTES *key_attr_redirect( struct key_redirect *redir, OBJECT_
     memcpy( full + full_len - name_len, attr->ObjectName->Buffer, name_len * sizeof(WCHAR) );
     if (info != (KEY_NAME_INFORMATION *)buffer) RtlFreeHeap( GetProcessHeap(), 0, info );
 
-    if (!is_key_element( full, full_len, software_root, root_len )) goto done;
-    rest = full + root_len;
-    rest_len = full_len - root_len;
-    if (is_key_element( rest, rest_len, wow6432node, node_len )) goto done;
+    if (is_key_element( full, full_len, software_root, root_len ))
+    {
+        insert = root_len;
+        if (is_key_element( full + insert, full_len - insert, wow6432node, node_len )) goto done;
+        if (is_key_element( full + insert, full_len - insert, classes, classes_len ))
+        {
+            insert += classes_len;
+            if (!(first = redirected_classes_len( full + insert, full_len - insert ))) goto done;
+        }
+    }
+    else if (full_len > user_len && !_wcsnicmp( full, user_root, user_len ))
+    {
+        for (i = user_len; i < full_len && full[i] != '\\'; i++);
+        if (i - user_len > suffix_len && !_wcsnicmp( full + i - suffix_len, classes_suffix, suffix_len ))
+            insert = i;
+        else if (is_key_element( full + i, full_len - i, software_classes, software_classes_len ))
+            insert = i + software_classes_len;
+        else goto done;
+        if (!(first = redirected_classes_len( full + insert, full_len - insert ))) goto done;
+    }
+    else goto done;
 
     out = full + full_len;
-    memcpy( out, software_root, root_len * sizeof(WCHAR) );
-    if (is_key_element( rest, rest_len, classes, classes_len ))
-    {
-        sub = rest + classes_len;
-        sub_len = rest_len - classes_len;
-        if (is_key_element( sub, sub_len, wow6432node, node_len ))
-        {
-            sub += node_len;
-            sub_len -= node_len;
-        }
-        memcpy( out + root_len, classes, classes_len * sizeof(WCHAR) );
-        memcpy( out + root_len + classes_len, wow6432node, node_len * sizeof(WCHAR) );
-        for (first_len = 1; first_len < sub_len && sub[first_len] != '\\'; first_len++);
-        memcpy( out + root_len + classes_len + node_len, sub, min( first_len, sub_len ) * sizeof(WCHAR) );
-        if (sub_len && !key_exists( out, root_len + classes_len + node_len + first_len ))
-        {
-            memcpy( out + root_len + classes_len, sub, sub_len * sizeof(WCHAR) );
-            redir->name.Length = (root_len + classes_len + sub_len) * sizeof(WCHAR);
-        }
-        else
-        {
-            memcpy( out + root_len + classes_len + node_len, sub, sub_len * sizeof(WCHAR) );
-            redir->name.Length = (root_len + classes_len + node_len + sub_len) * sizeof(WCHAR);
-        }
-    }
-    else
-    {
-        memcpy( out + root_len, wow6432node, node_len * sizeof(WCHAR) );
-        memcpy( out + root_len + node_len, rest, rest_len * sizeof(WCHAR) );
-        redir->name.Length = (root_len + node_len + rest_len) * sizeof(WCHAR);
-    }
+    memcpy( out, full, insert * sizeof(WCHAR) );
+    memcpy( out + insert, wow6432node, node_len * sizeof(WCHAR) );
+    memcpy( out + insert + node_len, full + insert, (full_len - insert) * sizeof(WCHAR) );
 
     redir->buffer = full;
     redir->name.Buffer = out;
-    redir->name.MaximumLength = redir->name.Length;
+    redir->name.Length = redir->name.MaximumLength = (full_len + node_len) * sizeof(WCHAR);
+    if (first)
+    {
+        redir->node_end = insert + node_len;
+        redir->first_end = insert + node_len + first;
+    }
     redir->attr = *attr;
     redir->attr.RootDirectory = NULL;
     redir->attr.ObjectName = &redir->name;
@@ -161,6 +163,27 @@ static OBJECT_ATTRIBUTES *key_attr_redirect( struct key_redirect *redir, OBJECT_
 done:
     RtlFreeHeap( GetProcessHeap(), 0, full );
     return attr;
+}
+
+static BOOL create_redirect_parents( const struct key_redirect *redir )
+{
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING name;
+    ULONG ends[2], i;
+    HANDLE key;
+
+    if (!redir->first_end) return FALSE;
+    ends[0] = redir->node_end;
+    ends[1] = redir->first_end;
+    for (i = 0; i < ARRAY_SIZE(ends); i++)
+    {
+        name.Buffer = redir->name.Buffer;
+        name.Length = name.MaximumLength = ends[i] * sizeof(WCHAR);
+        InitializeObjectAttributes( &attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL );
+        if (NtCreateKey( &key, KEY_CREATE_SUB_KEY, &attr, 0, NULL, 0, NULL )) return FALSE;
+        NtClose( key );
+    }
+    return TRUE;
 }
 
 static void free_key_redirect( struct key_redirect *redir )
@@ -184,12 +207,18 @@ NTSTATUS WINAPI wow64_NtCreateKey( UINT *args )
 
     struct object_attr64 attr;
     struct key_redirect redir;
+    OBJECT_ATTRIBUTES *key_attr;
+    UNICODE_STRING *key_class;
     UNICODE_STRING class;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtCreateKey( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), index, unicode_str_32to64( &class, class32 ), options, dispos );
+    key_attr = key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access );
+    key_class = unicode_str_32to64( &class, class32 );
+    status = NtCreateKey( &handle, access, key_attr, index, key_class, options, dispos );
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND && create_redirect_parents( &redir ))
+        status = NtCreateKey( &handle, access, key_attr, index, key_class, options, dispos );
     free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
@@ -212,12 +241,18 @@ NTSTATUS WINAPI wow64_NtCreateKeyTransacted( UINT *args )
 
     struct object_attr64 attr;
     struct key_redirect redir;
+    OBJECT_ATTRIBUTES *key_attr;
+    UNICODE_STRING *key_class;
     UNICODE_STRING class;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtCreateKeyTransacted( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), index, unicode_str_32to64( &class, class32 ), options, transacted, dispos );
+    key_attr = key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access );
+    key_class = unicode_str_32to64( &class, class32 );
+    status = NtCreateKeyTransacted( &handle, access, key_attr, index, key_class, options, transacted, dispos );
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND && create_redirect_parents( &redir ))
+        status = NtCreateKeyTransacted( &handle, access, key_attr, index, key_class, options, transacted, dispos );
     free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
