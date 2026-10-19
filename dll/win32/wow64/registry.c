@@ -19,6 +19,7 @@
  */
 
 #include <stdarg.h>
+#include <wchar.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -30,6 +31,142 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
+
+struct key_redirect
+{
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING    name;
+    WCHAR            *buffer;
+};
+
+static const WCHAR software_root[] = L"\\REGISTRY\\MACHINE\\SOFTWARE";
+static const WCHAR wow6432node[] = L"\\Wow6432Node";
+static const WCHAR classes[] = L"\\Classes";
+
+static BOOL is_key_element( const WCHAR *str, ULONG len, const WCHAR *element, ULONG element_len )
+{
+    if (len < element_len || _wcsnicmp( str, element, element_len )) return FALSE;
+    return len == element_len || str[element_len] == '\\';
+}
+
+static BOOL key_exists( const WCHAR *path, ULONG len )
+{
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING name;
+    HANDLE key;
+    NTSTATUS status;
+
+    name.Buffer = (WCHAR *)path;
+    name.Length = name.MaximumLength = len * sizeof(WCHAR);
+    InitializeObjectAttributes( &attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL );
+    status = NtOpenKeyEx( &key, KEY_READ, &attr, 0 );
+    if (!status) NtClose( key );
+    return status != STATUS_OBJECT_NAME_NOT_FOUND && status != STATUS_OBJECT_PATH_NOT_FOUND;
+}
+
+static OBJECT_ATTRIBUTES *key_attr_redirect( struct key_redirect *redir, OBJECT_ATTRIBUTES *attr, ACCESS_MASK access )
+{
+    const ULONG root_len = ARRAY_SIZE(software_root) - 1, node_len = ARRAY_SIZE(wow6432node) - 1;
+    const ULONG classes_len = ARRAY_SIZE(classes) - 1;
+    char buffer[sizeof(KEY_NAME_INFORMATION) + MAX_PATH * sizeof(WCHAR)];
+    KEY_NAME_INFORMATION *info = (KEY_NAME_INFORMATION *)buffer;
+    const WCHAR *parent = NULL, *rest, *sub;
+    ULONG parent_len = 0, name_len, full_len, rest_len, sub_len, first_len, size = sizeof(buffer);
+    WCHAR *full, *out;
+    NTSTATUS status;
+
+    redir->buffer = NULL;
+    if (!attr || !attr->ObjectName || (access & KEY_WOW64_64KEY)) return attr;
+
+    name_len = attr->ObjectName->Length / sizeof(WCHAR);
+    if (attr->RootDirectory)
+    {
+        status = NtQueryKey( attr->RootDirectory, KeyNameInformation, info, size, &size );
+        if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL)
+        {
+            if (!(info = RtlAllocateHeap( GetProcessHeap(), 0, size ))) return attr;
+            status = NtQueryKey( attr->RootDirectory, KeyNameInformation, info, size, &size );
+        }
+        if (!status)
+        {
+            parent = info->Name;
+            parent_len = info->NameLength / sizeof(WCHAR);
+        }
+    }
+    else if (name_len && attr->ObjectName->Buffer[0] == '\\')
+    {
+        status = STATUS_SUCCESS;
+    }
+    else status = STATUS_OBJECT_PATH_SYNTAX_BAD;
+
+    full_len = parent_len + (parent_len && name_len ? 1 : 0) + name_len;
+    if (status || full_len + node_len + classes_len > UNICODE_STRING_MAX_CHARS ||
+        !(full = RtlAllocateHeap( GetProcessHeap(), 0, (2 * full_len + node_len + 1) * sizeof(WCHAR) )))
+    {
+        if (info != (KEY_NAME_INFORMATION *)buffer) RtlFreeHeap( GetProcessHeap(), 0, info );
+        return attr;
+    }
+
+    memcpy( full, parent, parent_len * sizeof(WCHAR) );
+    if (parent_len && name_len) full[parent_len] = '\\';
+    memcpy( full + full_len - name_len, attr->ObjectName->Buffer, name_len * sizeof(WCHAR) );
+    if (info != (KEY_NAME_INFORMATION *)buffer) RtlFreeHeap( GetProcessHeap(), 0, info );
+
+    if (!is_key_element( full, full_len, software_root, root_len )) goto done;
+    rest = full + root_len;
+    rest_len = full_len - root_len;
+    if (is_key_element( rest, rest_len, wow6432node, node_len )) goto done;
+
+    out = full + full_len;
+    memcpy( out, software_root, root_len * sizeof(WCHAR) );
+    if (is_key_element( rest, rest_len, classes, classes_len ))
+    {
+        sub = rest + classes_len;
+        sub_len = rest_len - classes_len;
+        if (is_key_element( sub, sub_len, wow6432node, node_len ))
+        {
+            sub += node_len;
+            sub_len -= node_len;
+        }
+        memcpy( out + root_len, classes, classes_len * sizeof(WCHAR) );
+        memcpy( out + root_len + classes_len, wow6432node, node_len * sizeof(WCHAR) );
+        for (first_len = 1; first_len < sub_len && sub[first_len] != '\\'; first_len++);
+        memcpy( out + root_len + classes_len + node_len, sub, min( first_len, sub_len ) * sizeof(WCHAR) );
+        if (sub_len && !key_exists( out, root_len + classes_len + node_len + first_len ))
+        {
+            memcpy( out + root_len + classes_len, sub, sub_len * sizeof(WCHAR) );
+            redir->name.Length = (root_len + classes_len + sub_len) * sizeof(WCHAR);
+        }
+        else
+        {
+            memcpy( out + root_len + classes_len + node_len, sub, sub_len * sizeof(WCHAR) );
+            redir->name.Length = (root_len + classes_len + node_len + sub_len) * sizeof(WCHAR);
+        }
+    }
+    else
+    {
+        memcpy( out + root_len, wow6432node, node_len * sizeof(WCHAR) );
+        memcpy( out + root_len + node_len, rest, rest_len * sizeof(WCHAR) );
+        redir->name.Length = (root_len + node_len + rest_len) * sizeof(WCHAR);
+    }
+
+    redir->buffer = full;
+    redir->name.Buffer = out;
+    redir->name.MaximumLength = redir->name.Length;
+    redir->attr = *attr;
+    redir->attr.RootDirectory = NULL;
+    redir->attr.ObjectName = &redir->name;
+    return &redir->attr;
+
+done:
+    RtlFreeHeap( GetProcessHeap(), 0, full );
+    return attr;
+}
+
+static void free_key_redirect( struct key_redirect *redir )
+{
+    if (redir->buffer) RtlFreeHeap( GetProcessHeap(), 0, redir->buffer );
+}
 
 
 /**********************************************************************
@@ -46,12 +183,14 @@ NTSTATUS WINAPI wow64_NtCreateKey( UINT *args )
     ULONG *dispos = get_ptr( &args );
 
     struct object_attr64 attr;
+    struct key_redirect redir;
     UNICODE_STRING class;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtCreateKey( &handle, access, objattr_32to64( &attr, attr32 ), index, unicode_str_32to64( &class, class32 ), options, dispos );
+    status = NtCreateKey( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), index, unicode_str_32to64( &class, class32 ), options, dispos );
+    free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
 }
@@ -72,12 +211,14 @@ NTSTATUS WINAPI wow64_NtCreateKeyTransacted( UINT *args )
     ULONG *dispos = get_ptr( &args );
 
     struct object_attr64 attr;
+    struct key_redirect redir;
     UNICODE_STRING class;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtCreateKeyTransacted( &handle, access, objattr_32to64( &attr, attr32 ), index, unicode_str_32to64( &class, class32 ), options, transacted, dispos );
+    status = NtCreateKeyTransacted( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), index, unicode_str_32to64( &class, class32 ), options, transacted, dispos );
+    free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
 }
@@ -266,11 +407,13 @@ NTSTATUS WINAPI wow64_NtOpenKey( UINT *args )
     OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
 
     struct object_attr64 attr;
+    struct key_redirect redir;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtOpenKey( &handle, access, objattr_32to64( &attr, attr32 ));
+    status = NtOpenKey( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ));
+    free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
 }
@@ -287,11 +430,13 @@ NTSTATUS WINAPI wow64_NtOpenKeyEx( UINT *args )
     ULONG options = get_ulong( &args );
 
     struct object_attr64 attr;
+    struct key_redirect redir;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtOpenKeyEx( &handle, access, objattr_32to64( &attr, attr32 ), options );
+    status = NtOpenKeyEx( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), options );
+    free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
 }
@@ -308,11 +453,13 @@ NTSTATUS WINAPI wow64_NtOpenKeyTransacted( UINT *args )
     HANDLE transaction = get_handle( &args );
 
     struct object_attr64 attr;
+    struct key_redirect redir;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtOpenKeyTransacted( &handle, access, objattr_32to64( &attr, attr32 ), transaction );
+    status = NtOpenKeyTransacted( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), transaction );
+    free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
 }
@@ -330,11 +477,13 @@ NTSTATUS WINAPI wow64_NtOpenKeyTransactedEx( UINT *args )
     HANDLE transaction = get_handle( &args );
 
     struct object_attr64 attr;
+    struct key_redirect redir;
     HANDLE handle = 0;
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtOpenKeyTransactedEx( &handle, access, objattr_32to64( &attr, attr32 ), options, transaction );
+    status = NtOpenKeyTransactedEx( &handle, access, key_attr_redirect( &redir, objattr_32to64( &attr, attr32 ), access ), options, transaction );
+    free_key_redirect( &redir );
     put_handle( handle_ptr, handle );
     return status;
 }
