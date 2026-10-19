@@ -172,6 +172,7 @@ set(COMPAT_RUNTIME_MODULES
     sxs
     taskschd
     twinapi
+    tzres
     ucrtbase
     uiautomationcore
     urlmon
