@@ -2,6 +2,8 @@ compile_commands.json
 output-*
 /.rosconfig/
 modules/optional
+/media/boot/switch/downloads/
+/media/boot/switch/optional/
 modules/bootcd_extras
 modules/livecd_extras
 modules/3rdparty

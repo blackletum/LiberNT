@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
+
+set(ROSCONFIG_PROFILE_PACKAGES)
+set(ROSCONFIG_PROFILE_CONFIGS
+    "SWITCH_SUPPORT:BOOL=ON"
+    "RPI_SUPPORT:BOOL=OFF"
+    "RPI3_SUPPORT:BOOL=OFF"
+    "RPI5_SUPPORT:BOOL=OFF")

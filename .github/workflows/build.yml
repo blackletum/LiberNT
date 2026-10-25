@@ -28,6 +28,12 @@ jobs:
             ntver: '0xA00'
             profile: profile_raspberry
           - compiler: clang
+            arch: arm64
+            config: Debug
+            ntver: '0xA00'
+            profile: profile_switch
+            variant: switch
+          - compiler: clang
             arch: riscv64
             config: Debug
             ntver: '0xA00'

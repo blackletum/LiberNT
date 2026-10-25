@@ -78,4 +78,27 @@ if(ARCH STREQUAL "arm64")
 
         message(STATUS "ARM64: RPi boot files validated (${_rpi_file_count} files)")
     endif()
+
+    option(SWITCH_SUPPORT "Build Nintendo Switch SD card images" OFF)
+
+    if(SWITCH_SUPPORT)
+        set(SWITCH_BOOT_DIR "${_ARM64_BOOT_MEDIA_DIR}/switch")
+        set(SWITCH_HEKATE_INI "${SWITCH_BOOT_DIR}/hekate_ipl.ini")
+        if(NOT EXISTS "${SWITCH_HEKATE_INI}")
+            message(FATAL_ERROR "ARM64: Required Switch boot file missing: ${SWITCH_HEKATE_INI}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SWITCH_HEKATE_INI}")
+
+        set(SWITCH_OPTIONAL_DIR "${SWITCH_BOOT_DIR}/optional")
+        file(GLOB_RECURSE SWITCH_OPTIONAL_ENTRIES CONFIGURE_DEPENDS LIST_DIRECTORIES true
+             RELATIVE "${SWITCH_OPTIONAL_DIR}" "${SWITCH_OPTIONAL_DIR}/*")
+        list(SORT SWITCH_OPTIONAL_ENTRIES)
+        if(SWITCH_OPTIONAL_ENTRIES)
+            message(STATUS "ARM64: Nintendo Switch SD card layout enabled with the boot files in ${SWITCH_OPTIONAL_DIR}")
+        else()
+            message(WARNING "ARM64: no Switch boot files in ${SWITCH_OPTIONAL_DIR}. "
+                            "LiberNT.img is built without Hekate and its firmware and does not boot; "
+                            "run scripts/prepare_switch_boot.sh or scripts/prepare_switch_boot.cmd first")
+        endif()
+    endif()
 endif()
