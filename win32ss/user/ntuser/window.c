@@ -2096,7 +2096,7 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    WndSetParent(pWnd, ParentWindow);
    WndSetOwner(pWnd, OwnerWindow);
    pWnd->fnid = 0;
-   if (pdeskCreated)
+   if (pdeskCreated || Class->atomClassName == gpsi->atomSysClass[ICLS_MENU])
       pWnd->DpiContext = NTUSER_DPI_PER_MONITOR_AWARE;
    else if (ParentWindow && !UserIsDesktopWindow(ParentWindow) && !UserIsMessageWindow(ParentWindow))
       pWnd->DpiContext = ParentWindow->DpiContext;
@@ -2673,7 +2673,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    }
 
    /* Send the NCCREATE message */
-   Result = co_IntSendMessage(UserHMGetHandle(Window), WM_NCCREATE, 0, (LPARAM) Cs);
+   Result = co_IntSendSystemMessage(UserHMGetHandle(Window), WM_NCCREATE, 0, (LPARAM) Cs);
    if (!Result)
    {
       ERR("co_UserCreateWindowEx(%wZ): NCCREATE message failed\n", ClassName);
@@ -2733,7 +2733,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    }
 
    /* Send the WM_CREATE message. */
-   Result = co_IntSendMessage(UserHMGetHandle(Window), WM_CREATE, 0, (LPARAM) Cs);
+   Result = co_IntSendSystemMessage(UserHMGetHandle(Window), WM_CREATE, 0, (LPARAM) Cs);
    if (Result == (LRESULT)-1)
    {
       ERR("co_UserCreateWindowEx(%wZ): WM_CREATE message failed\n", ClassName);
@@ -3055,6 +3055,8 @@ NtUserCreateWindowEx(
     UserEnterExclusive();
 
     /* Call the internal function */
+    if (UserDpiIsVirtualCaller())
+        UserDpiCreateStructToPhysical(&Cs);
     pwnd = co_UserCreateWindowEx(&Cs, &ustrClsVersion, plstrWindowName, acbiBuffer, dwFlags, &ustrClassName);
 
     if(!pwnd)
