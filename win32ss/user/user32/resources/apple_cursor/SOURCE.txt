@@ -1,0 +1,36 @@
+Source: apple_cursor, macOS variant (open source macOS style cursors)
+Repository: https://github.com/ful1e5/apple_cursor
+Revision: fe044a42b4e9cea16ea762d2ed9004f6d7b35543
+Author: Abdulkaiz Khatri (ful1e5) and contributors
+License: GPL-3.0 (see LICENSE)
+
+Files used, unmodified: svg/*.svg (following the repository's symbolic links),
+svg/wait/*.svg and svg/left_ptr_watch/*.svg, copied to svg/.
+
+curgen.py applies the macOS colors from the repository's render.json
+(#00FF00 to #000000, #0000FF to #FFFFFF) and renders each 256-pixel SVG at the
+full cursor size, as configs/win_rg.build.toml does: 32, 40, 48, 56, 64, 72,
+80, 96 and 128 pixels for the static cursors, 32, 48, 64, 96 and 128 pixels for
+the two 40-frame animations, which go into ../ocr_wait.ani and
+../ocr_appstarting.ani at 2 jiffies per frame (win_delay 1, doubled by
+clickgen). Hotspots come from win_rg.build.toml (sb_up_arrow from
+x.build.toml), scaled and truncated as clickgen does, 128,128 when a cursor
+has none.
+
+    ocr_normal.cur, ocr_icon.cur, ocr_cdautostart.cur   left_ptr
+    ocr_ibeam.cur                                       xterm
+    ocr_wait.ani                                        wait/*
+    ocr_cross.cur                                       cross
+    ocr_up.cur                                          sb_up_arrow
+    ocr_sizenwse.cur                                    bottom_right_corner
+    ocr_sizenesw.cur                                    bottom_left_corner
+    ocr_sizewe.cur                                      sb_h_double_arrow
+    ocr_sizens.cur                                      sb_v_double_arrow
+    ocr_sizeall.cur, ocr_size.cur                       all-scroll
+    ocr_no.cur                                          crossed_circle
+    ocr_appstarting.ani                                 left_ptr_watch/*
+    ocr_help.cur                                        question_arrow
+    ocr_pen.cur                                         pencil
+    ocr_hand.cur                                        hand2
+
+Regenerate with: python3 -I curgen.py svg ..

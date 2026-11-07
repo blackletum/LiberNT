@@ -416,10 +416,10 @@ Used Version: git commit 045831e
 License: MIT (https://spdx.org/licenses/MIT.html)
 URL: https://github.com/microsoft/libdxg
 
-Title: Bibata Cursor (Original Classic)
-Path: win32ss/user/user32/resources/bibata
+Title: apple_cursor (macOS style cursors)
+Path: win32ss/user/user32/resources/apple_cursor
 Path: win32ss/user/user32/resources/ocr_*.cur
 Path: win32ss/user/user32/resources/ocr_*.ani
-Used Version: git commit ddb0927
+Used Version: git commit fe044a4
 License: GPL-3.0 (https://spdx.org/licenses/GPL-3.0-only.html)
-URL: https://github.com/ful1e5/Bibata_Cursor
+URL: https://github.com/ful1e5/apple_cursor
