@@ -1621,25 +1621,28 @@ VOID FASTCALL IntFreeHwndList(PWINDOWLIST pwlTarget)
 }
 
 static VOID FASTCALL
-IntRemoveImeWindowsFromList(PWINDOWLIST pwl)
+IntMoveImeWindowsToEnd(PWINDOWLIST pwl)
 {
-    HWND *phwnd;
+    HWND *phwnd, *phwndEnd = pwl->phwndLast;
+    HWND hwnd;
 
-    for (phwnd = pwl->ahwnd; phwnd < pwl->phwndLast;)
+    for (phwnd = pwl->ahwnd; phwnd < phwndEnd;)
     {
         PWND Window = ValidateHwndNoErr(*phwnd);
 
-        if (!Window ||
+        if (!Window || !Window->spwndParent || !UserIsDesktopWindow(Window->spwndParent) ||
             (Window->fnid != FNID_IME && !IS_WND_IMELIKE(Window)))
         {
             ++phwnd;
             continue;
         }
 
+        hwnd = *phwnd;
         RtlMoveMemory(phwnd,
                       phwnd + 1,
-                      (SIZE_T)(pwl->phwndLast - phwnd) * sizeof(*phwnd));
-        --pwl->phwndLast;
+                      (SIZE_T)(pwl->phwndLast - phwnd - 1) * sizeof(*phwnd));
+        pwl->phwndLast[-1] = hwnd;
+        --phwndEnd;
     }
 }
 
@@ -1675,7 +1678,6 @@ NtUserBuildHwndList(
    PTHREADINFO pti = NULL;
    PWINDOWLIST pwl = NULL, pwlMessage = NULL;
    PWND Parent = NULL, Start = NULL;
-   BOOLEAN TopLevelThreadQuery = FALSE;
    ULONG Count, MessageCount = 0, Required;
    HWND Terminator = HWND_TERMINATOR;
 
@@ -1784,8 +1786,6 @@ NtUserBuildHwndList(
             goto Quit;
          }
       }
-
-      TopLevelThreadQuery = (pti != NULL);
    }
    else
    {
@@ -1827,15 +1827,9 @@ NtUserBuildHwndList(
       }
    }
 
-   /* Per-thread IME, IME UI, and their STA helper windows are implementation details. */
-   if (TopLevelThreadQuery)
-   {
-      IntRemoveImeWindowsFromList(pwl);
-      if (pwlMessage)
-      {
-         IntRemoveImeWindowsFromList(pwlMessage);
-      }
-   }
+   IntMoveImeWindowsToEnd(pwl);
+   if (pwlMessage)
+      IntMoveImeWindowsToEnd(pwlMessage);
 
    Count = (ULONG)(pwl->phwndLast - pwl->ahwnd);
    if (pwlMessage)
@@ -2357,15 +2351,14 @@ Error:
    return NULL;
 }
 
-/* An IME-like window is created directly below the first owner that is not IME-like. */
-/* FIXME: an IME UI window created after its owner was shown lands below the default IME window on Windows */
+/* The default IME window is created directly below the first owner that is not IME-like. */
 static HWND FASTCALL
 IntImeLikeInsertAfter(PWND Window, HWND hwndInsertAfter)
 {
    PWND Owner = Window->spwndOwner;
    UINT Depth = 0;
 
-   if (hwndInsertAfter != HWND_TOP || !IS_WND_IMELIKE(Window))
+   if (hwndInsertAfter != HWND_TOP || Window->pcls->atomClassName != gpsi->atomSysClass[ICLS_IME])
       return hwndInsertAfter;
    while (Owner && IS_WND_IMELIKE(Owner) && Depth++ < 64)
       Owner = Owner->spwndOwner;
