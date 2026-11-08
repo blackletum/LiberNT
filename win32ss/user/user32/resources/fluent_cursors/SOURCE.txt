@@ -1,0 +1,31 @@
+Source: Fluent cursors (Fluent-icon-theme by Vince Liuice), white variant
+Repository: https://github.com/vinceliuice/Fluent-icon-theme
+Revision: c8a244f571ef8fb47812bdc9dbce76546cedce69
+License: GPL-3.0 (see LICENSE)
+
+Files used, unmodified: cursors/src/svg-white/*.svg; the wait-NN and
+progress-NN animation frames are kept in svg/wait/ and svg/progress/.
+
+curgen.py renders each 32-pixel SVG at 32, 40, 48, 56, 64, 72, 80, 96 and 128
+pixels and writes PNG frames into ../ocr_*.cur, and the 23-frame wait and
+progress animations into ../ocr_wait.ani and ../ocr_appstarting.ani at
+2 jiffies per frame (30 ms in cursors/src/config). Hotspots come from
+cursors/src/config/*.cursor (32-pixel canvas), scaled and rounded down.
+
+    ocr_normal.cur, ocr_icon.cur, ocr_cdautostart.cur   default
+    ocr_ibeam.cur                                       text
+    ocr_wait.ani                                        wait-01..23
+    ocr_cross.cur                                       crosshair
+    ocr_up.cur                                          up-arrow
+    ocr_sizenwse.cur                                    size_fdiag
+    ocr_sizenesw.cur                                    size_bdiag
+    ocr_sizewe.cur                                      size_hor
+    ocr_sizens.cur                                      size_ver
+    ocr_sizeall.cur, ocr_size.cur                       fleur
+    ocr_no.cur                                          not-allowed
+    ocr_appstarting.ani                                 progress-01..23
+    ocr_help.cur                                        help
+    ocr_pen.cur                                         pencil
+    ocr_hand.cur                                        pointer
+
+Regenerate with: python3 -I curgen.py svg ..
