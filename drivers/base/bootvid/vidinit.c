@@ -166,12 +166,33 @@ __init_VidInitialize(VOID)
  * x64 and others: no callee stack cleanup, a normal call is fine.
  */
 
+/// #ifdef _MSC_VER
+/// #define TRAMP_ATTR
+/// #else
+/// /* Optimized, for the call below to become a direct tail-jump */
+/// #define TRAMP_ATTR  __attribute__((optimize("O2")))
+/// #endif
+
+//
+// Test the following settings also on non-x86 ...
+//
 #ifdef _MSC_VER
-#define TRAMP_ATTR
+
+/* Keep the ebp frame (no /Oy), as the inline asm relies on it */
+#pragma optimize("y", off)
+
+#define TRAMP_ATTR  __declspec(safebuffers)
+
+#else // def __GNUC__
+
+#if (__GNUC__ >= 11)
+#define NO_CHECKS   __attribute__((no_stack_protector))
 #else
-/* Optimized, for the call below to become a direct tail-jump */
-#define TRAMP_ATTR  __attribute__((optimize("O2")))
+#define NO_CHECKS   // __attribute__((__optimize__("-fno-stack-protector"))) /* Nothing: no arrays nor address-taken locals => no canary */
 #endif
+#define TRAMP_ATTR  NO_CHECKS __attribute__((optimize("no-omit-frame-pointer")))
+
+#endif // _MSC_VER
 
 #endif // _M_IX86
 
@@ -241,6 +262,12 @@ __declspec(naked)
 #else // def __GNUC__
 __attribute__((naked))
 #endif
+#else
+    #if (__GNUC__ >= 11)
+    __attribute__((no_stack_protector))
+    #else
+    // __attribute__((__optimize__("-fno-stack-protector"))) /* Nothing: no arrays nor address-taken locals => no canary */
+    #endif
 #endif // _M_IX86
 BOOLEAN
 NTAPI
